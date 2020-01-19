@@ -1,5 +1,5 @@
 /* source: xio.h */
-/* Copyright Gerhard Rieger 2001-2011 */
+/* Copyright Gerhard Rieger and contributors (see file CHANGES) */
 /* Published under the GNU General Public License V.2, see file COPYING */
 
 #ifndef __xio_h_included
@@ -26,7 +26,7 @@ struct opt;
 #define XIO_RDONLY  O_RDONLY /* asserted to be 0 */
 #define XIO_WRONLY  O_WRONLY /* asserted to be 1 */
 #define XIO_RDWR    O_RDWR   /* asserted to be 2 */
-#define XIO_ACCMODE O_ACCMODE	/* must be 3 */
+#define XIO_ACCMODE (XIO_RDONLY|XIO_WRONLY|XIO_RDWR)	/* must be 3 */
 #define XIO_MAYFORK     4 /* address is allowed to fork the program (fork) */
 #define XIO_MAYCHILD    8 /* address is allowed to fork off a child (exec)*/
 #define XIO_MAYEXEC    16 /* address is allowed to exec a prog (exec+nofork) */
@@ -201,6 +201,11 @@ typedef struct single {
 #endif
 	 } ip;
 #endif /* _WITH_IP4 || _WITH_IP6 */
+#if WITH_UNIX
+	 struct {
+	    bool     tight;
+	 } un;
+#endif /* WITH_UNIX */
       } socket;
 #endif /* _WITH_SOCKET */
       struct {
@@ -299,7 +304,7 @@ struct addrdesc {
 typedef unsigned long flags_t;
 
 union integral {
-   int            u_bool;
+   bool           u_bool;
    uint8_t        u_byte;
    gid_t          u_gidt;
    int	          u_int;

@@ -1,5 +1,5 @@
 /* source: xio-progcall.c */
-/* Copyright Gerhard Rieger 2001-2009 */
+/* Copyright Gerhard Rieger and contributors (see file CHANGES) */
 /* Published under the GNU General Public License V.2, see file COPYING */
 
 /* this file contains common code dealing with program calls (exec, system) */
@@ -103,8 +103,17 @@ int _xioopen_foxec(int xioflags,	/* XIO_RDONLY etc. */
       usepipes = false;
    }
 #endif /* HAVE_PTY */
-   retropt_ushort(popts, OPT_FDIN,  (unsigned short *)&fdi);
-   retropt_ushort(popts, OPT_FDOUT, (unsigned short *)&fdo);
+
+   if (retropt_ushort(popts, OPT_FDIN,  (unsigned short *)&fdi) >= 0) {
+      if ((xioflags&XIO_ACCMODE) == XIO_RDONLY) {
+	 Error("_xioopen_foxec(): option fdin is useless in read-only mode");
+      }
+   }
+   if (retropt_ushort(popts, OPT_FDOUT, (unsigned short *)&fdo) >= 0) {
+      if ((xioflags&XIO_ACCMODE) == XIO_WRONLY) {
+	 Error("_xioopen_foxec(): option fdout is useless in write-only mode");
+      }
+   }
 
    if (withfork) {
       if (!(xioflags&XIO_MAYCHILD)) {
@@ -159,39 +168,31 @@ int _xioopen_foxec(int xioflags,	/* XIO_RDONLY etc. */
       }
 #endif
 
+      /* remember: fdin is the fs where the sub program reads from, thus it is
+	 sock0[]'s read fd */
       /*! problem: when fdi==WRFD(sock[0]) or fdo==RDFD(sock[0]) */
       if (rw != XIO_WRONLY) {
-	 if (XIO_GETRDFD(sock[0]/*!!*/) == fdi) {
-	    if (Fcntl_l(fdi, F_SETFD, 0) < 0) {
-	       Warn2("fcntl(%d, F_SETFD, 0): %s", fdi, strerror(errno));
-	    }
-	    if (Dup2(XIO_GETRDFD(sock[0]), fdi) < 0) {
-	       Error3("dup2(%d, %d): %s",
-		      XIO_GETRDFD(sock[0]), fdi, strerror(errno));
-	    }
-	    /*0 Info2("dup2(%d, %d)", XIO_GETRDFD(sock[0]), fdi);*/
-	 } else {
-	    if (Dup2(XIO_GETRDFD(sock[0]), fdi) < 0) {
-	       Error3("dup2(%d, %d): %s",
-		      XIO_GETRDFD(sock[0]), fdi, strerror(errno));
-	    }
-	    /*0 Info2("dup2(%d, %d)", XIO_GETRDFD(sock[0]), fdi);*/
-	 }
-      }
-      if (rw != XIO_RDONLY) {
-	 if (XIO_GETWRFD(sock[0]) == fdo) {
+	 if (XIO_GETWRFD(sock[0]/*!!*/) == fdo) {
 	    if (Fcntl_l(fdo, F_SETFD, 0) < 0) {
 	       Warn2("fcntl(%d, F_SETFD, 0): %s", fdo, strerror(errno));
 	    }
-	    if (Dup2(XIO_GETWRFD(sock[0]), fdo) < 0) {
-	       Error3("dup2(%d, %d): %s)",
-		      XIO_GETWRFD(sock[0]), fdo, strerror(errno));
-	    }
-	    /*0 Info2("dup2(%d, %d)", XIO_GETWRFD(sock[0]), fdo);*/
 	 } else {
 	    if (Dup2(XIO_GETWRFD(sock[0]), fdo) < 0) {
-	       Error3("dup2(%d, %d): %s)",
+	       Error3("dup2(%d, %d): %s",
 		      XIO_GETWRFD(sock[0]), fdo, strerror(errno));
+	    }
+	 }
+	 /*0 Info2("dup2(%d, %d)", XIO_GETRDFD(sock[0]), fdi);*/
+      }
+      if (rw != XIO_RDONLY) {
+	 if (XIO_GETRDFD(sock[0]) == fdi) {
+	    if (Fcntl_l(fdi, F_SETFD, 0) < 0) {
+	       Warn2("fcntl(%d, F_SETFD, 0): %s", fdi, strerror(errno));
+	    }
+	 } else {
+	    if (Dup2(XIO_GETRDFD(sock[0]), fdi) < 0) {
+	       Error3("dup2(%d, %d): %s)",
+		      XIO_GETRDFD(sock[0]), fdi, strerror(errno));
 	    }
 	    /*0 Info2("dup2(%d, %d)", XIO_GETWRFD(sock[0]), fdo);*/
 	 }
@@ -229,17 +230,17 @@ int _xioopen_foxec(int xioflags,	/* XIO_RDONLY etc. */
 	       Warn2("unlockpt(%d): %s", ptyfd, strerror(errno));
 	    }
 #endif /* HAVE_UNLOCKPT */
-#if HAVE_PTSNAME	/* AIX, not Linux */
+#if HAVE_PROTOTYPE_LIB_ptsname	/* AIX, not Linux */
 	    if ((tn = Ptsname(ptyfd)) == NULL) {
 	       Warn2("ptsname(%d): %s", ptyfd, strerror(errno));
 	    }
-#endif /* HAVE_PTSNAME */
+#endif /* HAVE_PROTOTYPE_LIB_ptsname */
 	    if (tn == NULL) {
 	       if ((tn = Ttyname(ptyfd)) == NULL) {
-		  Warn2("ttyname(%d): %s", ptyfd, strerror(errno));
+		  Error2("ttyname(%d): %s", ptyfd, strerror(errno));
 	       }
 	    }
-	    strncpy(ptyname, tn, MAXPTYNAMELEN);
+	    ptyname[0] = '\0'; strncat(ptyname, tn, MAXPTYNAMELEN-1);
 	    if ((ttyfd = Open(tn, O_RDWR|O_NOCTTY, 0620)) < 0) {
 	       Warn2("open(\"%s\", O_RDWR|O_NOCTTY, 0620): %s", tn, strerror(errno));
 	    } else {
@@ -251,9 +252,9 @@ int _xioopen_foxec(int xioflags,	/* XIO_RDONLY etc. */
 	    /* AIX:   I_PUSH def'd; pty: ioctl(, I_FIND, ...) -> 1 */
 	    /* SunOS: I_PUSH def'd; pty: ioctl(, I_FIND, ...) -> 0 */
 	    /* HP-UX: I_PUSH def'd; pty: ioctl(, I_FIND, ...) -> 0 */
-	    if (Ioctl(ttyfd, I_FIND, "ldterm") == 0) {
-	       Ioctl(ttyfd, I_PUSH, "ptem");		/* 0 */
-	       Ioctl(ttyfd, I_PUSH, "ldterm");		/* 0 */
+	    if (Ioctl(ttyfd, I_FIND, "ldterm\0") == 0) {
+	       Ioctl(ttyfd, I_PUSH, "ptem\0\0\0");	/* 0 */ /* padding for AdressSanitizer */
+	       Ioctl(ttyfd, I_PUSH, "ldterm\0");	/* 0 */
 	       Ioctl(ttyfd, I_PUSH, "ttcompat");	/* HP-UX: -1 */
 	    }
 #endif

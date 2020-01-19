@@ -1,5 +1,5 @@
 /* source: sslcls.c */
-/* Copyright Gerhard Rieger 2001-2011 */
+/* Copyright Gerhard Rieger and contributors (see file CHANGES) */
 /* Published under the GNU General Public License V.2, see file COPYING */
 
 /* explicit system call and C library trace function, for those who miss strace
@@ -55,6 +55,7 @@ const SSL_METHOD *sycSSLv2_server_method(void) {
 }
 #endif
 
+#if HAVE_SSLv3_client_method
 const SSL_METHOD *sycSSLv3_client_method(void) {
    const SSL_METHOD *result;
    Debug("SSLv3_client_method()");
@@ -62,7 +63,9 @@ const SSL_METHOD *sycSSLv3_client_method(void) {
    Debug1("SSLv3_client_method() -> %p", result);
    return result;
 }
+#endif
 
+#if HAVE_SSLv3_server_method
 const SSL_METHOD *sycSSLv3_server_method(void) {
    const SSL_METHOD *result;
    Debug("SSLv3_server_method()");
@@ -70,6 +73,7 @@ const SSL_METHOD *sycSSLv3_server_method(void) {
    Debug1("SSLv3_server_method() -> %p", result);
    return result;
 }
+#endif
 
 const SSL_METHOD *sycSSLv23_client_method(void) {
    const SSL_METHOD *result;
@@ -103,6 +107,66 @@ const SSL_METHOD *sycTLSv1_server_method(void) {
    return result;
 }
 
+#if HAVE_TLSv1_1_client_method
+const SSL_METHOD *sycTLSv1_1_client_method(void) {
+   const SSL_METHOD *result;
+   Debug("TLSv1_1_client_method()");
+   result = TLSv1_1_client_method();
+   Debug1("TLSv1_1_client_method() -> %p", result);
+   return result;
+}
+#endif
+
+#if HAVE_TLSv1_1_server_method
+const SSL_METHOD *sycTLSv1_1_server_method(void) {
+   const SSL_METHOD *result;
+   Debug("TLSv1_1_server_method()");
+   result = TLSv1_1_server_method();
+   Debug1("TLSv1_1_server_method() -> %p", result);
+   return result;
+}
+#endif
+
+#if HAVE_TLSv1_2_client_method
+const SSL_METHOD *sycTLSv1_2_client_method(void) {
+   const SSL_METHOD *result;
+   Debug("TLSv1_2_client_method()");
+   result = TLSv1_2_client_method();
+   Debug1("TLSv1_2_client_method() -> %p", result);
+   return result;
+}
+#endif
+
+#if HAVE_TLSv1_2_server_method
+const SSL_METHOD *sycTLSv1_2_server_method(void) {
+   const SSL_METHOD *result;
+   Debug("TLSv1_2_server_method()");
+   result = TLSv1_2_server_method();
+   Debug1("TLSv1_2_server_method() -> %p", result);
+   return result;
+}
+#endif
+
+#if HAVE_DTLSv1_client_method
+const SSL_METHOD *sycDTLSv1_client_method(void) {
+   const SSL_METHOD *result;
+   Debug("DTLSv1_client_method()");
+   result = DTLSv1_client_method();
+   Debug1("DTLSv1_client_method() -> %p", result);
+   return result;
+}
+#endif
+
+#if HAVE_DTLSv1_server_method
+const SSL_METHOD *sycDTLSv1_server_method(void) {
+   const SSL_METHOD *result;
+   Debug("DTLSv1_server_method()");
+   result = DTLSv1_server_method();
+   Debug1("DTLSv1_server_method() -> %p", result);
+   return result;
+}
+#endif
+
 SSL_CTX *sycSSL_CTX_new(const SSL_METHOD *method) {
    SSL_CTX *result;
    Debug1("SSL_CTX_new(%p)", method);
@@ -123,8 +187,8 @@ int sycSSL_CTX_load_verify_locations(SSL_CTX *ctx, const char *CAfile,
 				     const char *CApath) {
    int result;
    Debug7("SSL_CTX_load_verify_locations(%p, %s%s%s, %s%s%s)", ctx,
-	  CAfile?"\"":"", CAfile?CAfile:NULL, CAfile?"\"":"",
-	  CApath?"\"":"", CApath?CApath:NULL, CApath?"\"":"");
+	  CAfile?"\"":"", CAfile?CAfile:"", CAfile?"\"":"",
+	  CApath?"\"":"", CApath?CApath:"", CApath?"\"":"");
    result = SSL_CTX_load_verify_locations(ctx, CAfile, CApath);
    Debug1("SSL_CTX_load_verify_locations() -> %d", result);
    return result;
@@ -275,6 +339,7 @@ void sycSSL_free(SSL *ssl) {
    return;
 }
 
+#if !defined(OPENSSL_NO_EGD) && HAVE_RAND_egd
 int sycRAND_egd(const char *path) {
    int result;
    Debug1("RAND_egd(\"%s\")", path);
@@ -282,6 +347,7 @@ int sycRAND_egd(const char *path) {
    Debug1("RAND_egd() -> %d", result);
    return result;
 }
+#endif
 
 DH *sycPEM_read_bio_DHparams(BIO *bp, DH **x, pem_password_cb *cb, void *u) {
    DH *result;
@@ -319,7 +385,7 @@ int sycFIPS_mode_set(int onoff) {
 }
 #endif /* WITH_FIPS */
 
-#if OPENSSL_VERSION_NUMBER >= 0x00908000L
+#if OPENSSL_VERSION_NUMBER >= 0x00908000L && !defined(OPENSSL_NO_COMP)
 const COMP_METHOD *sycSSL_get_current_compression(SSL *ssl) {
    const COMP_METHOD *result;
    Debug1("SSL_get_current_compression(%p)", ssl);

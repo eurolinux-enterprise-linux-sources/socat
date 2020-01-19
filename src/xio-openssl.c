@@ -1,11 +1,14 @@
 /* source: xio-openssl.c */
-/* Copyright Gerhard Rieger 2002-2011 */
+/* Copyright Gerhard Rieger and contributors (see file CHANGES) */
 /* Published under the GNU General Public License V.2, see file COPYING */
 
 /* this file contains the implementation of the openssl addresses */
 
 #include "xiosysincludes.h"
 #if WITH_OPENSSL	/* make this address configure dependend */
+#include <openssl/conf.h>
+#include <openssl/x509v3.h>
+
 #include "xioopen.h"
 
 #include "xio-fd.h"
@@ -45,10 +48,13 @@ static int xioopen_openssl_listen(int argc, const char *argv[], struct opt *opts
 				  int xioflags, xiofile_t *fd, unsigned groups,
 			   int dummy1, int dummy2, int dummy3);
 static int openssl_SSL_ERROR_SSL(int level, const char *funcname);
-static int openssl_handle_peer_certificate(struct single *xfd, bool opt_ver,
+static int openssl_handle_peer_certificate(struct single *xfd,
+					   const char *peername,
+					   bool opt_ver,
 					   int level);
 static int xioSSL_set_fd(struct single *xfd, int level);
-static int xioSSL_connect(struct single *xfd, bool opt_ver, int level);
+static int xioSSL_connect(struct single *xfd, const char *opt_commonname, bool opt_ver, int level);
+static int openssl_delete_cert_info(void);
 
 
 /* description record for ssl connect */
@@ -104,12 +110,13 @@ const struct optdesc opt_openssl_cafile      = { "openssl-cafile",     "cafile",
 const struct optdesc opt_openssl_capath      = { "openssl-capath",     "capath", OPT_OPENSSL_CAPATH,      GROUP_OPENSSL, PH_SPEC, TYPE_FILENAME, OFUNC_SPEC };
 const struct optdesc opt_openssl_egd         = { "openssl-egd",        "egd",    OPT_OPENSSL_EGD,         GROUP_OPENSSL, PH_SPEC, TYPE_FILENAME, OFUNC_SPEC };
 const struct optdesc opt_openssl_pseudo      = { "openssl-pseudo",     "pseudo", OPT_OPENSSL_PSEUDO,      GROUP_OPENSSL, PH_SPEC, TYPE_BOOL,     OFUNC_SPEC };
-#if OPENSSL_VERSION_NUMBER >= 0x00908000L
+#if OPENSSL_VERSION_NUMBER >= 0x00908000L && !defined(OPENSSL_NO_COMP)
 const struct optdesc opt_openssl_compress    = { "openssl-compress",   "compress", OPT_OPENSSL_COMPRESS,  GROUP_OPENSSL, PH_SPEC, TYPE_STRING,   OFUNC_SPEC };
 #endif
 #if WITH_FIPS
 const struct optdesc opt_openssl_fips        = { "openssl-fips",       "fips",   OPT_OPENSSL_FIPS,        GROUP_OPENSSL, PH_SPEC, TYPE_BOOL,     OFUNC_SPEC };
 #endif
+const struct optdesc opt_openssl_commonname  = { "openssl-commonname", "cn",     OPT_OPENSSL_COMMONNAME,  GROUP_OPENSSL, PH_SPEC, TYPE_STRING,   OFUNC_SPEC };
 
 
 /* If FIPS is compiled in, we need to track if the user asked for FIPS mode.
@@ -140,7 +147,7 @@ int xio_reset_fips_mode(void) {
 static void openssl_conn_loginfo(SSL *ssl) {
    Notice1("SSL connection using %s", SSL_get_cipher(ssl));
 
-#if OPENSSL_VERSION_NUMBER >= 0x00908000L
+#if OPENSSL_VERSION_NUMBER >= 0x00908000L && !defined(OPENSSL_NO_COMP)
    {
       const COMP_METHOD *comp, *expansion;
 
@@ -189,6 +196,7 @@ static int
    SSL_CTX* ctx;
    bool opt_ver = true;	/* verify peer certificate */
    char *opt_cert = NULL;	/* file name of client certificate */
+   const char *opt_commonname = NULL;	/* for checking peer certificate */
    int result;
 
    if (!(xioflags & XIO_MAYCONVERT)) {
@@ -203,6 +211,12 @@ static int
    }
    hostname = argv[1];
    portname = argv[2];
+   if (hostname[0] == '\0') {
+      /* we catch this explicitely because empty commonname (peername) disables
+	 commonName check of peer certificate */
+      Error1("%s: empty host name", argv[0]);
+      return STAT_NORETRY;
+   }
 
    xfd->howtoend = END_SHUTDOWN;
    if (applyopts_single(xfd, opts, PH_INIT) < 0)  return -1;
@@ -211,6 +225,11 @@ static int
    retropt_bool(opts, OPT_FORK, &dofork);
 
    retropt_string(opts, OPT_OPENSSL_CERTIFICATE, &opt_cert);
+   retropt_string(opts, OPT_OPENSSL_COMMONNAME, (char **)&opt_commonname);
+   
+   if (opt_commonname == NULL) {
+      opt_commonname = hostname;
+   }
 
    result =
       _xioopen_openssl_prepare(opts, xfd, false, &opt_ver, opt_cert, &ctx);
@@ -243,7 +262,7 @@ static int
       /* this cannot fork because we retrieved fork option above */
       result =
 	 _xioopen_connect(xfd,
-			  needbind?(struct sockaddr *)us:NULL, sizeof(*us),
+			  needbind?(struct sockaddr *)us:NULL, uslen,
 			  (struct sockaddr *)them, themlen,
 			  opts, pf, socktype, ipproto, lowport, level);
       switch (result) {
@@ -270,7 +289,7 @@ static int
 	 return result;
       }
 
-      result = _xioopen_openssl_connect(xfd, opt_ver, ctx, level);
+      result = _xioopen_openssl_connect(xfd, opt_ver, opt_commonname, ctx, level);
       switch (result) {
       case STAT_OK: break;
 #if WITH_RETRY
@@ -338,6 +357,7 @@ static int
    SSL connection from an FD and a CTX. */
 int _xioopen_openssl_connect(struct single *xfd,
 			     bool opt_ver,
+			     const char *opt_commonname,
 			     SSL_CTX *ctx,
 			     int level) {
    SSL *ssl;
@@ -362,14 +382,15 @@ int _xioopen_openssl_connect(struct single *xfd,
       return result;
    }
 
-   result = xioSSL_connect(xfd, opt_ver, level);
+   result = xioSSL_connect(xfd, opt_commonname, opt_ver, level);
    if (result != STAT_OK) {
       sycSSL_free(xfd->para.openssl.ssl);
       xfd->para.openssl.ssl = NULL;
       return result;
    }
 
-   result = openssl_handle_peer_certificate(xfd, opt_ver, level);
+   result = openssl_handle_peer_certificate(xfd, opt_commonname,
+					    opt_ver, level);
    if (result != STAT_OK) {
       sycSSL_free(xfd->para.openssl.ssl);
       xfd->para.openssl.ssl = NULL;
@@ -411,6 +432,7 @@ static int
    SSL_CTX* ctx;
    bool opt_ver = true;	/* verify peer certificate - changed with 1.6.0 */
    char *opt_cert = NULL;	/* file name of server certificate */
+   const char *opt_commonname = NULL;	/* for checking peer certificate */
    int result;
 
    if (!(xioflags & XIO_MAYCONVERT)) {
@@ -442,6 +464,8 @@ static int
    if (opt_cert == NULL) {
       Warn("no certificate given; consider option \"cert\"");
    }
+
+   retropt_string(opts, OPT_OPENSSL_COMMONNAME, (char **)&opt_commonname);
 
    applyopts(-1, opts, PH_EARLY);
 
@@ -501,7 +525,7 @@ static int
 	 return result;
       }
 
-      result = _xioopen_openssl_listen(xfd, opt_ver, ctx, level);
+      result = _xioopen_openssl_listen(xfd, opt_ver, opt_commonname, ctx, level);
       switch (result) {
       case STAT_OK: break;
 #if WITH_RETRY
@@ -535,6 +559,7 @@ static int
 
 int _xioopen_openssl_listen(struct single *xfd,
 			     bool opt_ver,
+			    const char *opt_commonname,
 			     SSL_CTX *ctx,
 			     int level) {
    char error_string[120];
@@ -602,7 +627,7 @@ int _xioopen_openssl_listen(struct single *xfd,
 		    ERR_lib_error_string(err), ERR_func_error_string(err),
 		    ERR_reason_error_string(err));
 	    }
-	    /* Msg1(level, "SSL_connect(): %s", ERR_error_string(e, buf));*/
+	    /* Msg1(level, "SSL_accept(): %s", ERR_error_string(e, buf));*/
 	 }
 	 break;
       case SSL_ERROR_SSL:
@@ -616,7 +641,7 @@ int _xioopen_openssl_listen(struct single *xfd,
       return STAT_RETRYLATER;
    }
 
-   if (openssl_handle_peer_certificate(xfd, opt_ver, E_ERROR/*!*/) < 0) {
+   if (openssl_handle_peer_certificate(xfd, opt_commonname, opt_ver, E_ERROR/*!*/) < 0) {
       return STAT_NORETRY;
    }
 
@@ -690,9 +715,9 @@ int
 			    SSL_CTX **ctx)
 {
    bool opt_fips = false;
-   const SSL_METHOD *method;
+   const SSL_METHOD *method = NULL;
    char *me_str = NULL;	/* method string */
-   char *ci_str = NULL;	/* cipher string */
+   char *ci_str = "HIGH:-NULL:-PSK:-aNULL";	/* cipher string */
    char *opt_key  = NULL;	/* file name of client private key */
    char *opt_dhparam = NULL;	/* file name of DH params */
    char *opt_cafile = NULL;	/* certificate authority file */
@@ -721,7 +746,6 @@ int
 #if OPENSSL_VERSION_NUMBER >= 0x00908000L
    retropt_string(opts, OPT_OPENSSL_COMPRESS, &opt_compress);
 #endif
-
 #if WITH_FIPS
    if (opt_fips) {
       if (!sycFIPS_mode_set(1)) {
@@ -734,6 +758,8 @@ int
    }
 #endif
 
+   openssl_delete_cert_info();
+
    OpenSSL_add_all_algorithms();
    OpenSSL_add_all_ciphers();
    OpenSSL_add_all_digests();
@@ -745,59 +771,118 @@ int
    /*! actions_to_seed_PRNG();*/
 
    if (!server) {
-      if (me_str != 0) {
-	 if (!strcasecmp(me_str, "SSLv2") || !strcasecmp(me_str, "SSL2")) {
+      if (me_str != NULL) {
+	 if (false) {
+	    ;	/* for canonical reasons */
 #if HAVE_SSLv2_client_method
+	 } else if (!strcasecmp(me_str, "SSL2")) {
 	    method = sycSSLv2_client_method();
-#else
-	    Error1("OpenSSL method \"%s\" not provided by library", me_str);
-	    method = sycSSLv23_server_method();
 #endif
-	 } else
-	 if (!strcasecmp(me_str, "SSLv3") || !strcasecmp(me_str, "SSL3")) {
+#if HAVE_SSLv3_client_method
+	 } else if (!strcasecmp(me_str, "SSL3")) {
 	    method = sycSSLv3_client_method();
-	 } else if (!strcasecmp(me_str, "SSLv23") || !strcasecmp(me_str, "SSL23") ||
-		    !strcasecmp(me_str, "SSL")) {
+#endif
+#if HAVE_SSLv23_client_method
+	 } else if (!strcasecmp(me_str, "SSL23")) {
 	    method = sycSSLv23_client_method();
-	 } else if (!strcasecmp(me_str, "TLSv1") || !strcasecmp(me_str, "TLS1") ||
-		    !strcasecmp(me_str, "TLS")) {
+#endif
+#if HAVE_TLSv1_client_method
+	 } else if (!strcasecmp(me_str, "TLS1") || !strcasecmp(me_str, "TLS1.0")) {
 	    method = sycTLSv1_client_method();
+#endif
+#if HAVE_TLSv1_1_client_method
+	 } else if (!strcasecmp(me_str, "TLS1.1")) {
+	    method = sycTLSv1_1_client_method();
+#endif
+#if HAVE_TLSv1_2_client_method
+	 } else if (!strcasecmp(me_str, "TLS1.2")) {
+	    method = sycTLSv1_2_client_method();
+#endif
+#if HAVE_DTLSv1_client_method
+	 } else if (!strcasecmp(me_str, "DTLS") || !strcasecmp(me_str, "DTLS1")) {
+	    method = sycDTLSv1_client_method();
+#endif
 	 } else {
-	    Error1("openssl-method=\"%s\": unknown method", me_str);
-	    method = sycSSLv23_client_method();
+	    Error1("openssl-method=\"%s\": method unknown or not provided by library", me_str);
 	 }
       } else {
+#if   HAVE_SSLv23_client_method
 	 method = sycSSLv23_client_method();
+#elif HAVE_TLSv1_2_client_method
+	 method = sycTLSv1_2_client_method();
+#elif HAVE_TLSv1_1_client_method
+	 method = sycTLSv1_1_client_method();
+#elif HAVE_TLSv1_client_method
+	 method = sycTLSv1_client_method();
+#elif HAVE_SSLv3_client_method
+	 method = sycSSLv3_client_method();
+#elif HAVE_SSLv2_client_method
+	 method = sycSSLv2_client_method();
+#else
+#        error "OpenSSL does not seem to provide client methods"
+#endif
       }
    } else /* server */ {
       if (me_str != 0) {
-	 if (!strcasecmp(me_str, "SSLv2") || !strcasecmp(me_str, "SSL2")) {
+	 if (false) {
+	    ;	/* for canonical reasons */
+
 #if HAVE_SSLv2_server_method
+	 } else if (!strcasecmp(me_str, "SSL2")) {
 	    method = sycSSLv2_server_method();
-#else
-	    Error1("OpenSSL method \"%s\" not provided by library", me_str);
+#endif
+#if HAVE_SSLv3_server_method
+	 } else if (!strcasecmp(me_str, "SSL3")) {
+	    method = sycSSLv3_server_method();
+#endif
+#if HAVE_SSLv23_server_method
+	 } else if (!strcasecmp(me_str, "SSL23")) {
 	    method = sycSSLv23_server_method();
 #endif
-	 } else
-	 if (!strcasecmp(me_str, "SSLv3") || !strcasecmp(me_str, "SSL3")) {
-	    method = sycSSLv3_server_method();
-	 } else if (!strcasecmp(me_str, "SSLv23") || !strcasecmp(me_str, "SSL23") ||
-		    !strcasecmp(me_str, "SSL")) {
-	    method = sycSSLv23_server_method();
-	 } else if (!strcasecmp(me_str, "TLSv1") || !strcasecmp(me_str, "TLS1") ||
-		    !strcasecmp(me_str, "TLS")) {
+#if HAVE_TLSv1_server_method
+	 } else if (!strcasecmp(me_str, "TLS1") || !strcasecmp(me_str, "TLS1.0")) {
 	    method = sycTLSv1_server_method();
+#endif
+#if HAVE_TLSv1_1_server_method
+	 } else if (!strcasecmp(me_str, "TLS1.1")) {
+	    method = sycTLSv1_1_server_method();
+#endif
+#if HAVE_TLSv1_2_server_method
+	 } else if (!strcasecmp(me_str, "TLS1.2")) {
+	    method = sycTLSv1_2_server_method();
+#endif
+#if HAVE_DTLSv1_server_method
+	 } else if (!strcasecmp(me_str, "DTLS") || !strcasecmp(me_str, "DTLS1")) {
+	    method = sycDTLSv1_server_method();
+#endif
 	 } else {
-	    Error1("openssl-method=\"%s\": unknown method", me_str);
-	    method = sycSSLv23_server_method();
+	    Error1("openssl-method=\"%s\": method unknown or not provided by library", me_str);
 	 }
       } else {
+#if   HAVE_SSLv23_server_method
 	 method = sycSSLv23_server_method();
+#elif HAVE_TLSv1_2_server_method
+	 method = sycTLSv1_2_server_method();
+#elif HAVE_TLSv1_1_server_method
+	 method = sycTLSv1_1_server_method();
+#elif HAVE_TLSv1_server_method
+	 method = sycTLSv1_server_method();
+#elif HAVE_SSLv3_server_method
+	 method = sycSSLv3_server_method();
+#elif HAVE_SSLv2_server_method
+	 method = sycSSLv2_server_method();
+#else
+#        error "OpenSSL does not seem to provide client methods"
+#endif
       }
    }
 
    if (opt_egd) {
+#if !defined(OPENSSL_NO_EGD) && HAVE_RAND_egd
       sycRAND_egd(opt_egd);
+#else
+      Debug("RAND_egd() is not available by OpenSSL");
+#endif
    }
 
    if (opt_pseudo) {
@@ -831,48 +916,97 @@ int
    }
 
    {
-      static unsigned char dh512_p[] = {
-	 0xDA,0x58,0x3C,0x16,0xD9,0x85,0x22,0x89,0xD0,0xE4,0xAF,0x75,
-	 0x6F,0x4C,0xCA,0x92,0xDD,0x4B,0xE5,0x33,0xB8,0x04,0xFB,0x0F,
-	 0xED,0x94,0xEF,0x9C,0x8A,0x44,0x03,0xED,0x57,0x46,0x50,0xD3,
-	 0x69,0x99,0xDB,0x29,0xD7,0x76,0x27,0x6B,0xA2,0xD3,0xD4,0x12,
-	 0xE2,0x18,0xF4,0xDD,0x1E,0x08,0x4C,0xF6,0xD8,0x00,0x3E,0x7C,
-	 0x47,0x74,0xE8,0x33,
+      static unsigned char dh2048_p[] = {
+	 0x00,0xdc,0x21,0x64,0x56,0xbd,0x9c,0xb2,0xac,0xbe,0xc9,0x98,0xef,0x95,0x3e,
+	 0x26,0xfa,0xb5,0x57,0xbc,0xd9,0xe6,0x75,0xc0,0x43,0xa2,0x1c,0x7a,0x85,0xdf,
+	 0x34,0xab,0x57,0xa8,0xf6,0xbc,0xf6,0x84,0x7d,0x05,0x69,0x04,0x83,0x4c,0xd5,
+	 0x56,0xd3,0x85,0x09,0x0a,0x08,0xff,0xb5,0x37,0xa1,0xa3,0x8a,0x37,0x04,0x46,
+	 0xd2,0x93,0x31,0x96,0xf4,0xe4,0x0d,0x9f,0xbd,0x3e,0x7f,0x9e,0x4d,0xaf,0x08,
+	 0xe2,0xe8,0x03,0x94,0x73,0xc4,0xdc,0x06,0x87,0xbb,0x6d,0xae,0x66,0x2d,0x18,
+	 0x1f,0xd8,0x47,0x06,0x5c,0xcf,0x8a,0xb5,0x00,0x51,0x57,0x9b,0xea,0x1e,0xd8,
+	 0xdb,0x8e,0x3c,0x1f,0xd3,0x2f,0xba,0x1f,0x5f,0x3d,0x15,0xc1,0x3b,0x2c,0x82,
+	 0x42,0xc8,0x8c,0x87,0x79,0x5b,0x38,0x86,0x3a,0xeb,0xfd,0x81,0xa9,0xba,0xf7,
+	 0x26,0x5b,0x93,0xc5,0x3e,0x03,0x30,0x4b,0x00,0x5c,0xb6,0x23,0x3e,0xea,0x94,
+	 0xc3,0xb4,0x71,0xc7,0x6e,0x64,0x3b,0xf8,0x92,0x65,0xad,0x60,0x6c,0xd4,0x7b,
+	 0xa9,0x67,0x26,0x04,0xa8,0x0a,0xb2,0x06,0xeb,0xe0,0x7d,0x90,0xdd,0xdd,0xf5,
+	 0xcf,0xb4,0x11,0x7c,0xab,0xc1,0xa3,0x84,0xbe,0x27,0x77,0xc7,0xde,0x20,0x57,
+	 0x66,0x47,0xa7,0x35,0xfe,0x0d,0x6a,0x1c,0x52,0xb8,0x58,0xbf,0x26,0x33,0x81,
+	 0x5e,0xb7,0xa9,0xc0,0xee,0x58,0x11,0x74,0x86,0x19,0x08,0x89,0x1c,0x37,0x0d,
+	 0x52,0x47,0x70,0x75,0x8b,0xa8,0x8b,0x30,0x11,0x71,0x36,0x62,0xf0,0x73,0x41,
+	 0xee,0x34,0x9d,0x0a,0x2b,0x67,0x4e,0x6a,0xa3,0xe2,0x99,0x92,0x1b,0xf5,0x32,
+	 0x73,0x63
       };
-      static unsigned char dh512_g[] = {
+      static unsigned char dh2048_g[] = {
 	 0x02,
       };
       DH *dh;
+      BIGNUM *p = NULL, *g = NULL;
       unsigned long err;
 
-      if ((dh = DH_new()) == NULL) {
-	 while (err = ERR_get_error()) {
-	    Warn1("DH_new(): %s",
-		   ERR_error_string(err, NULL));
-	 }
-	 Error("DH_new() failed");
-      } else {
-	 dh->p = BN_bin2bn(dh512_p, sizeof(dh512_p), NULL);
-	 dh->g = BN_bin2bn(dh512_g, sizeof(dh512_g), NULL);
-	 if ((dh->p == NULL) || (dh->g == NULL)) {
-	    while (err = ERR_get_error()) {
-	       Warn1("BN_bin2bn(): %s",
-		     ERR_error_string(err, NULL));
-	    }
-	    Error("BN_bin2bn() failed");
-	 } else {
-	    if (SSL_CTX_set_tmp_dh(*ctx, dh) <= 0) {
-	       while (err = ERR_get_error()) {
-		  Warn3("SSL_CTX_set_tmp_dh(%p, %p): %s", *ctx, dh,
-			ERR_error_string(err, NULL));
-	       }
-	       Error2("SSL_CTX_set_tmp_dh(%p, %p) failed", *ctx, dh);
-	    }
-	    /*! OPENSSL_free(dh->p,g)? doc does not tell so */
-	 }
-	 DH_free(dh);
+      dh = DH_new();
+      p = BN_bin2bn(dh2048_p, sizeof(dh2048_p), NULL);
+      g = BN_bin2bn(dh2048_g, sizeof(dh2048_g), NULL);
+      if (!dh || !p || !g) {
+         if (dh)
+            DH_free(dh);
+         if (p)
+            BN_free(p);
+         if (g)
+            BN_free(g);
+         while (err = ERR_get_error()) {
+            Warn1("dh2048 setup(): %s",
+                  ERR_error_string(err, NULL));
+         }
+         Error("dh2048 setup failed");
+         goto cont_out;
       }
+#if HAVE_DH_set0_pqg
+      if (!DH_set0_pqg(dh, p, NULL, g)) {
+	      DH_free(dh);
+	      BN_free(p);
+	      BN_free(g);
+	      goto cont_out;
+      }
+#else
+      dh->p = p;
+      dh->g = g;
+#endif /* HAVE_DH_set0_pqg */
+      if (sycSSL_CTX_set_tmp_dh(*ctx, dh) <= 0) {
+         while (err = ERR_get_error()) {
+            Warn3("SSL_CTX_set_tmp_dh(%p, %p): %s", *ctx, dh,
+                  ERR_error_string(err, NULL));
+         }
+         Error2("SSL_CTX_set_tmp_dh(%p, %p) failed", *ctx, dh);
+      }
+      /* p & g are freed by DH_free() once attached */
+      DH_free(dh);
+cont_out:
+      ;
    }
+
+#if HAVE_TYPE_EC_KEY	/* not on Openindiana 5.11 */
+   {
+      /* see http://openssl.6102.n7.nabble.com/Problem-with-cipher-suite-ECDHE-ECDSA-AES256-SHA384-td42229.html */
+      int	 nid;
+      EC_KEY *ecdh;
+
+#if 0
+      nid = OBJ_sn2nid(ECDHE_CURVE);
+      if (nid == NID_undef) {
+	 Error("openssl: failed to set ECDHE parameters");
+	 return -1;
+      }
+#endif
+      nid = NID_X9_62_prime256v1;
+      ecdh = EC_KEY_new_by_curve_name(nid);
+      if (NULL == ecdh) {
+	 Error("openssl: failed to set ECDHE parameters");
+	 return -1;
+      }
+
+      SSL_CTX_set_tmp_ecdh(*ctx, ecdh);
+   }
+#endif /* HAVE_TYPE_EC_KEY */
 
 #if OPENSSL_VERSION_NUMBER >= 0x00908000L
    if (opt_compress) {
@@ -895,6 +1029,10 @@ int
 	    return STAT_RETRYLATER;
 	 }
       }
+#ifdef HAVE_SSL_CTX_set_default_verify_paths
+   } else {
+      SSL_CTX_set_default_verify_paths(*ctx);
+#endif
    }
 
    if (opt_cert) {
@@ -931,14 +1069,18 @@ int
 	    Info1("PEM_read_bio_DHparams(%p, NULL, NULL, NULL): error", bio);
 	 } else {
 	    BIO_free(bio);
-	    if (sycSSL_CTX_set_tmp_dh(*ctx, dh) == 0) {
-	       Error2("SSL_CTX_set_tmp_dh(%p, %p): error", ctx, dh);
+	    if (sycSSL_CTX_set_tmp_dh(*ctx, dh) <= 0) {
+	       while (err = ERR_get_error()) {
+		  Warn3("SSL_CTX_set_tmp_dh(%p, %p): %s", *ctx, dh,
+			ERR_error_string(err, NULL));
+	       }
+	       Error2("SSL_CTX_set_tmp_dh(%p, %p): error", *ctx, dh);
 	    }
 	 }
       }
    }
 
-   /* set pre ssl-connect options */
+   /* set pre openssl-connect options */
    /* SSL_CIPHERS */
    if (ci_str != NULL) {
       if (sycSSL_CTX_set_cipher_list(*ctx, ci_str) <= 0) {
@@ -973,19 +1115,35 @@ int
 static int openssl_SSL_ERROR_SSL(int level, const char *funcname) {
    unsigned long e;
    char buf[120];	/* this value demanded by "man ERR_error_string" */
+   int stat = STAT_OK;
 
-   e = ERR_get_error();
-   Debug1("ERR_get_error(): %lx", e);
-   if (e == ((ERR_LIB_RAND<<24)|
-	     (RAND_F_SSLEAY_RAND_BYTES<<12)|
-	     (RAND_R_PRNG_NOT_SEEDED)) /*0x24064064*/) {
-      Error("too few entropy; use options \"egd\" or \"pseudo\"");
-      return STAT_NORETRY;
-   } else {
-      Msg2(level, "%s(): %s", funcname, ERR_error_string(e, buf));
-      return level==E_ERROR ? STAT_NORETRY : STAT_RETRYLATER;
+   while (e = ERR_get_error()) {
+      Debug1("ERR_get_error(): %lx", e);
+      if
+	 (
+#if defined(OPENSSL_IS_BORINGSSL)
+	  0  /* BoringSSL's RNG always succeeds. */
+#elif defined(HAVE_RAND_status)
+	  ERR_GET_LIB(e) == ERR_LIB_RAND && RAND_status() != 1
+#else
+	  e == ((ERR_LIB_RAND<<24)|
+#if defined(RAND_F_RAND_BYTES)
+		(RAND_F_RAND_BYTES<<12)|
+#else
+		(RAND_F_SSLEAY_RAND_BYTES<<12)|
+#endif
+		(RAND_R_PRNG_NOT_SEEDED)) /*0x24064064*/
+#endif
+	  )
+      {
+	 Error("too few entropy; use options \"egd\" or \"pseudo\"");
+	 stat = STAT_NORETRY;
+      } else {
+	 Msg2(level, "%s(): %s", funcname, ERR_error_string(e, buf));
+	 stat =  level==E_ERROR ? STAT_NORETRY : STAT_RETRYLATER;
+      }
    }
-   return STAT_OK;
+   return stat;
 }
 
 static const char *openssl_verify_messages[] = {
@@ -1042,50 +1200,180 @@ static const char *openssl_verify_messages[] = {
    /* 50 */ "application verification failure",
 } ;
 
+
+/* delete all environment variables whose name begins with SOCAT_OPENSSL_
+   resp. <progname>_OPENSSL_ */
+static int openssl_delete_cert_info(void) {
+#  define XIO_ENVNAMELEN 256
+   const char *progname;
+   char envprefix[XIO_ENVNAMELEN];
+   char envname[XIO_ENVNAMELEN];
+   size_t i, l;
+   const char **entry;
+
+   progname = diag_get_string('p');
+   envprefix[0] = '\0'; strncat(envprefix, progname, XIO_ENVNAMELEN-1);
+   l = strlen(envprefix);
+   for (i = 0; i < l; ++i)  envprefix[i] = toupper(envprefix[i]);
+   strncat(envprefix+l, "_OPENSSL_", XIO_ENVNAMELEN-l-1);
+
+#if HAVE_VAR_ENVIRON
+   entry = (const char **)environ;
+   while (*entry != NULL) {
+      if (!strncmp(*entry, envprefix, strlen(envprefix))) {
+	 const char *eq = strchr(*entry, '=');
+	 if (eq == NULL)  eq = *entry + strlen(*entry);
+	 envname[0] = '\0'; strncat(envname, *entry, eq-*entry);
+	 Unsetenv(envname);
+      } else {
+	 ++entry;
+      }
+   }
+#endif /* HAVE_VAR_ENVIRON */
+   return 0;
+}
+
+/* read in the "name" information (from field "issuer" or "subject") and
+   create environment variable with complete info, eg:
+   SOCAT_OPENSSL_X509_SUBJECT */
+static int openssl_setenv_cert_name(const char *field, X509_NAME *name) {
+   BIO *bio = BIO_new(BIO_s_mem());
+   char *buf = NULL, *str;
+   size_t len;
+   X509_NAME_print_ex(bio, name, 0, XN_FLAG_ONELINE&~ASN1_STRFLGS_ESC_MSB);	/* rc not documented */
+   len = BIO_get_mem_data (bio, &buf);
+   if ((str = Malloc(len+1)) == NULL) {
+      BIO_free(bio);
+      return -1;
+   }
+   memcpy(str, buf, len);
+   str[len] = '\0';
+   Info2("SSL peer cert %s: \"%s\"", field, buf);
+   xiosetenv2("OPENSSL_X509", field, str, 1, NULL);
+   free(str);
+   BIO_free(bio);
+   return 0;
+}
+
+/* read in the "name" information (from field "issuer" or "subject") and
+   create environment variables with the fields, eg:
+   SOCAT_OPENSSL_X509_COMMONNAME
+*/
+static int openssl_setenv_cert_fields(const char *field, X509_NAME *name) {
+   int n, i;
+   n = X509_NAME_entry_count(name);
+   /* extract fields of cert name */
+   for (i = 0; i < n; ++i) {
+      X509_NAME_ENTRY *entry;
+      ASN1_OBJECT *obj;
+      ASN1_STRING *data;
+      const unsigned char *text;
+      int nid;
+      entry = X509_NAME_get_entry(name, i);
+      obj  = X509_NAME_ENTRY_get_object(entry);
+      data = X509_NAME_ENTRY_get_data(entry);
+      nid  = OBJ_obj2nid(obj);
+#if HAVE_ASN1_STRING_get0_data
+      text = ASN1_STRING_get0_data(data);
+#else
+      text = ASN1_STRING_data(data);
+#endif
+      Debug3("SSL peer cert %s entry: %s=\"%s\"", (field[0]?field:"subject"), OBJ_nid2ln(nid), text);
+      if (field != NULL && field[0] != '\0') {
+         xiosetenv3("OPENSSL_X509", field, OBJ_nid2ln(nid), (const char *)text, 2, " // ");
+      } else {
+         xiosetenv2("OPENSSL_X509", OBJ_nid2ln(nid), (const char *)text, 2, " // ");
+      }
+   }
+   return 0;
+}
+
+/* compares the peername used/provided by the client to cn as extracted from
+   the peer certificate.
+   supports wildcard cn like *.domain which matches domain and
+   host.domain
+   returns true on match */
+static bool openssl_check_name(const char *cn, const char *peername) {
+   const char *dotp;
+   if (peername == NULL) {
+      Info1("commonName \"%s\": no peername", cn);
+      return false;
+   } else if (peername[0] == '\0') {
+      Info1("commonName \"%s\": matched by empty peername", cn);
+      return true;
+   }
+   if (! (cn[0] == '*' && cn[1] == '.')) {
+      /* normal server name - this is simple */
+      Debug1("commonName \"%s\" has no wildcard", cn);
+      if (strcmp(cn, peername) == 0) {
+	 Debug2("commonName \"%s\" matches peername \"%s\"", cn, peername);
+	 return true;
+      } else {
+	 Info2("commonName \"%s\" does not match peername \"%s\"", cn, peername);
+	 return false;
+      }
+   }
+   /* wildcard cert */
+   Debug1("commonName \"%s\" is a wildcard name", cn);
+   /* case: just the base domain */
+   if (strcmp(cn+2, peername) == 0) {
+      Debug2("wildcard commonName \"%s\" matches base domain \"%s\"", cn, peername);
+      return true;
+   }
+   /* case: subdomain; only one level! */
+   dotp = strchr(peername, '.');
+   if (dotp == NULL) {
+      Info2("peername \"%s\" is not a subdomain, thus is not matched by wildcard commonName \"%s\"",
+	    peername, cn);
+      return false;
+   }
+   if (strcmp(cn+1, dotp) != 0) {
+      Info2("commonName \"%s\" does not match subdomain peername \"%s\"", cn, peername);
+      return false;
+   }
+   Debug2("commonName \"%s\" matches subdomain peername \"%s\"", cn, peername);
+   return true;
+}
+
+/* retrieves the commonName field and compares it to the peername
+   returns true on match, false otherwise */
+static bool openssl_check_peername(X509_NAME *name, const char *peername) {
+   int ind = -1;
+   X509_NAME_ENTRY *entry;
+   ASN1_STRING *data;
+   const unsigned char *text;
+   ind = X509_NAME_get_index_by_NID(name, NID_commonName, -1);
+   if (ind < 0) {
+      Info("no COMMONNAME field in peer certificate");	
+      return false;
+   }
+   entry = X509_NAME_get_entry(name, ind);
+   data = X509_NAME_ENTRY_get_data(entry);
+#if HAVE_ASN1_STRING_get0_data
+   text = ASN1_STRING_get0_data(data);
+#else
+   text = ASN1_STRING_data(data);
+#endif
+   return openssl_check_name((const char *)text, peername);
+}
+
+/* retrieves certificate provided by peer, sets env vars containing
+   certificates field values, and checks peername if provided by
+   calling function */
+/* parts of this code were copied from Gene Spaffords C/C++ Secure Programming at Etutorials.org:
+   http://etutorials.org/Programming/secure+programming/Chapter+10.+Public+Key+Infrastructure/10.8+Adding+Hostname+Checking+to+Certificate+Verification/
+   The code examples in this tutorial do not seem to have explicit license restrictions.
+*/
 static int openssl_handle_peer_certificate(struct single *xfd,
+					   const char *peername,
 					   bool opt_ver, int level) {
    X509 *peer_cert;
-   char *str;
-   char buff[2048];	/* hold peer certificate */
+   X509_NAME *subjectname, *issuername;
+   /*ASN1_TIME not_before, not_after;*/
+   int extcount, i, ok = 0;
    int status;
 
-   /* SSL_CTX_add_extra_chain_cert
-      SSL_get_verify_result
-   */
-   if ((peer_cert = SSL_get_peer_certificate(xfd->para.openssl.ssl)) != NULL) {
-      Debug("peer certificate:");
-      if ((str = X509_NAME_oneline(X509_get_subject_name(peer_cert), buff, sizeof(buff))) != NULL)
-	 Debug1("\tsubject: %s", str);  /*free (str); SIGSEGV*/
-      if ((str = X509_NAME_oneline(X509_get_issuer_name(peer_cert), buff, sizeof(buff))) != NULL)
-	 Debug1("\tissuer: %s", str);  /*free (str); SIGSEGV*/
-   }
-
-   if (peer_cert) {
-      if (opt_ver) {
-	 long verify_result;
-	 if ((verify_result = sycSSL_get_verify_result(xfd->para.openssl.ssl)) == X509_V_OK) {
-	    Info("accepted peer certificate");
-	    status = STAT_OK;
-	 } else {
-	    const char *message = NULL;
-	    if (verify_result >= 0 &&
-		(size_t)verify_result <
-		   sizeof(openssl_verify_messages)/sizeof(char*))
-	    {
-	       message = openssl_verify_messages[verify_result];
-	    }
-	    if (message) {
-	       Msg1(level, "%s", message);
-	    } else {
-	       Msg1(level, "rejected peer certificate with error %ld", verify_result);
-	    }
-	    status = STAT_RETRYLATER;
-	 }
-      } else {
-	 Notice("no check of certificate");
-	 status = STAT_OK;
-      }
-   } else {
+   if ((peer_cert = SSL_get_peer_certificate(xfd->para.openssl.ssl)) == NULL) {
       if (opt_ver) {
 	 Msg(level, "no peer certificate");
 	 status = STAT_RETRYLATER;
@@ -1093,8 +1381,113 @@ static int openssl_handle_peer_certificate(struct single *xfd,
 	 Notice("no peer certificate and no check");
 	 status = STAT_OK;
       }
+      return status;
    }
 
+   /* verify peer certificate (trust, signature, validity dates) */
+   if (opt_ver) {
+      long verify_result;
+      if ((verify_result = sycSSL_get_verify_result(xfd->para.openssl.ssl)) != X509_V_OK) {
+	 const char *message = NULL;
+	 if (verify_result >= 0 &&
+	     (size_t)verify_result <
+	     sizeof(openssl_verify_messages)/sizeof(char*)) {
+	    message = openssl_verify_messages[verify_result];
+	 }
+	 if (message) {
+	    Msg1(level, "%s", message);
+	 } else {
+	    Msg1(level, "rejected peer certificate with error %ld", verify_result);
+	 }
+	 status = STAT_RETRYLATER;
+	 X509_free(peer_cert);
+	 return STAT_RETRYLATER;
+      }
+      Info("peer certificate is trusted");
+   }
+
+   /* set env vars from cert's subject and issuer values */
+   if ((subjectname = X509_get_subject_name(peer_cert)) != NULL) {
+      openssl_setenv_cert_name("subject", subjectname);
+      openssl_setenv_cert_fields("", subjectname);
+      /*! I'd like to provide dates too; see
+	 http://markmail.org/message/yi4vspp7aeu3xwtu#query:+page:1+mid:jhnl4wklif3pgzqf+state:results */
+   }
+   if ((issuername = X509_get_issuer_name(peer_cert)) != NULL) {
+      openssl_setenv_cert_name("issuer", issuername);
+   }
+
+   /* check peername against cert's subjectAltName DNS entries */
+   /* this code is based on example from Gerhard Gappmeier in
+      http://openssl.6102.n7.nabble.com/How-to-extract-subjectAltName-td17236.html
+   */
+   if ((extcount = X509_get_ext_count(peer_cert)) > 0) {
+      for (i = 0;  !ok && i < extcount;  ++i) {
+	 const char            *extstr;
+	 X509_EXTENSION        *ext;
+	 const X509V3_EXT_METHOD     *meth;
+	 ext = X509_get_ext(peer_cert, i);
+	 extstr = OBJ_nid2sn(OBJ_obj2nid(X509_EXTENSION_get_object(ext)));
+	 if (!strcasecmp(extstr, "subjectAltName")) {
+	    void *names;
+	    if (!(meth = X509V3_EXT_get(ext))) break;   
+	    names = X509_get_ext_d2i(peer_cert, NID_subject_alt_name, NULL, NULL);
+	    if (names) {
+	       int numalts;
+	       int i;
+
+	       /* get amount of alternatives, RFC2459 claims there MUST be at least one, but we don't depend on it... */
+	       numalts = sk_GENERAL_NAME_num ( names );
+	       /* loop through all alternatives */
+	       for ( i=0; ( i<numalts ); i++ ) {
+		  /* get a handle to alternative name number i */
+		  const GENERAL_NAME *pName = sk_GENERAL_NAME_value (names, i );
+		  unsigned char *pBuffer;
+		  switch ( pName->type ) {
+
+		  case GEN_DNS:
+		     ASN1_STRING_to_UTF8(&pBuffer, 
+pName->d.ia5);
+		     xiosetenv("OPENSSL_X509V3_SUBJECTALTNAME_DNS", (char *)pBuffer, 2, " // ");
+		     if (peername != NULL &&
+			 openssl_check_name((char *)pBuffer, /*const char*/peername)) {
+			ok = 1;
+		     }
+		     OPENSSL_free(pBuffer);
+		     break;
+
+		  default: continue;
+		  }
+	       }
+	    }
+	 }
+      }
+   }
+
+   if (!opt_ver) {
+      Notice("option openssl-verify disabled, no check of certificate");
+      X509_free(peer_cert);
+      return STAT_OK;
+   }
+   if (peername == NULL || peername[0] == '\0') {
+      Notice("trusting certificate, no check of commonName");
+      X509_free(peer_cert);
+      return STAT_OK;
+   }
+   if (ok) {
+      Notice("trusting certificate, commonName matches");
+      X509_free(peer_cert);
+      return STAT_OK;
+   }
+
+   /* here: all envs set; opt_ver, cert verified, no subjAltName match -> check subject CN */
+   if (!openssl_check_peername(/*X509_NAME*/subjectname, /*const char*/peername)) {
+      Error("certificate is valid but its commonName does not match hostname");
+      status = STAT_NORETRY;
+   } else {
+      Notice("trusting certificate, commonName matches");
+      status = STAT_OK;
+   }
    X509_free(peer_cert);
    return status;
 }
@@ -1119,7 +1512,8 @@ static int xioSSL_set_fd(struct single *xfd, int level) {
    in case of an error condition, this function check forever and retry
    options and ev. sleeps an interval. It returns NORETRY when the caller
    should not retry for any reason. */
-static int xioSSL_connect(struct single *xfd, bool opt_ver, int level) {
+static int xioSSL_connect(struct single *xfd, const char *opt_commonname,
+			  bool opt_ver, int level) {
    char error_string[120];
    int errint, status, ret;
    unsigned long err;
@@ -1164,7 +1558,7 @@ static int xioSSL_connect(struct single *xfd, bool opt_ver, int level) {
 	 break;
       case SSL_ERROR_SSL:
 	 status = openssl_SSL_ERROR_SSL(level, "SSL_connect");
-	 if (openssl_handle_peer_certificate(xfd, opt_ver, level/*!*/) < 0) {
+	 if (openssl_handle_peer_certificate(xfd, opt_commonname, opt_ver, level/*!*/) < 0) {
 	    return STAT_RETRYLATER;
 	 }
 	 break;
@@ -1192,6 +1586,7 @@ ssize_t xioread_openssl(struct single *pipe, void *buff, size_t bufsiz) {
       case SSL_ERROR_NONE:
 	 /* this is not an error, but I dare not continue for security reasons*/
 	 Error("ok");
+	 break;
       case SSL_ERROR_ZERO_RETURN:
 	 Error("connection closed by peer");
 	 break;

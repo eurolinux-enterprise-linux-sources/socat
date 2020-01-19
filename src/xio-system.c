@@ -1,5 +1,5 @@
 /* source: xio-system.c */
-/* Copyright Gerhard Rieger 2001-2008 */
+/* Copyright Gerhard Rieger and contributors (see file CHANGES) */
 /* Published under the GNU General Public License V.2, see file COPYING */
 
 /* this file contains the source for opening addresses of system type */
@@ -40,6 +40,10 @@ static int xioopen_system(int argc, const char *argv[], struct opt *opts,
    if (status == 0) {	/* child */
       int numleft;
 
+      /* do not shutdown connections that belong our parent */
+      sock[0] = NULL;
+      sock[1] = NULL;
+
       if (setopt_path(opts, &path) < 0) {
 	 /* this could be dangerous, so let us abort this child... */
 	 Exit(1);
@@ -57,12 +61,14 @@ static int xioopen_system(int argc, const char *argv[], struct opt *opts,
 	 Dup2(duptostderr, 2);
       }
       Info1("executing shell command \"%s\"", string);
+      errno=0;
       result = System(string);
       if (result != 0) {
 	 Warn2("system(\"%s\") returned with status %d", string, result);
-	 Warn1("system(): %s", strerror(errno));
+	 if (errno != 0)
+	    Warn1("system(): %s", strerror(errno));
       }
-      Exit(0);	/* this child process */
+      Exit(result>>8);	/* this child process */
    }
 
    /* parent */

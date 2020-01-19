@@ -1,37 +1,37 @@
+# tests requires network and not all tests pass
+%global enable_tests 0
 %global _hardened_build 1
 
 Summary: Bidirectional data relay between two data channels ('netcat++')
 Name: socat
-Version: 1.7.2.2
+Version: 1.7.3.2
 Release: 2%{?dist}
 License: GPLv2
 Url:  http://www.dest-unreach.org/%{name}
 Source: http://www.dest-unreach.org/socat/download/%{name}-%{version}.tar.gz
 Group: Applications/Internet
 BuildRequires: openssl-devel readline-devel ncurses-devel
-BuildRequires: autoconf kernel-headers > 2.6.18
+BuildRequires: autoconf kernel-headers > 2.6.18 tcp_wrappers-devel
+%if %{enable_tests}
+BuildRequires: net-tools openssl iputils iproute
+%endif
 
-Patch1: socat-1.7.2.1-procan-cdefs.patch
-Patch2: socat-1.7.2.1-errqueue.patch
+Patch1: socat-1.7.3.1-test.patch
 
 %description
 Socat is a relay for bidirectional data transfer between two independent data
 channels. Each of these data channels may be a file, pipe, device (serial line
 etc. or a pseudo terminal), a socket (UNIX, IP4, IP6 - raw, UDP, TCP), an
 SSL socket, proxy CONNECT connection, a file descriptor (stdin etc.), the GNU
-line editor (readline), a program, or a combination of two of these. 
-
+line editor (readline), a program, or a combination of two of these.
 
 %prep
-%setup -q 
+%setup -q
 iconv -f iso8859-1 -t utf-8 CHANGES > CHANGES.utf8
 mv CHANGES.utf8 CHANGES
 %patch1 -p1
-%patch2 -p1
 
 %build
-autoconf
-export CPPFLAGS="-I%{_includedir}/readline5" LDFLAGS="-L%{_libdir}/readline5"
 %configure  \
         --enable-help --enable-stdio \
         --enable-fdnum --enable-file --enable-creat \
@@ -41,32 +41,57 @@ export CPPFLAGS="-I%{_includedir}/readline5" LDFLAGS="-L%{_libdir}/readline5"
         --enable-listen --enable-proxy --enable-exec \
         --enable-system --enable-pty --enable-readline \
         --enable-openssl --enable-sycls --enable-filan \
-        --enable-retry --enable-libwrap
+        --enable-retry --enable-libwrap --enable-fips
 
-chmod 644 *.sh
 make %{?_smp_mflags}
 
-# Needs networking
-#% check
-#sh ./test.sh
+%check
+%if %{enable_tests}
+# DTLS1 test causes build to hang
+sed -i "s/ DTLS1//" -i test.sh
+export TERM=ansi
+export OD_C=/usr/bin/od
+make test
+# Only test 319 fails on scratch-builds:
+# test 319 OPENSSL_CONNECT_BIND: test OPENSSL-CONNECT with bind option... !port 46327 timed out! FAILED
+# summary: 368 tests, 366 selected; 293 ok, 1 failed, 72 could not be performed
+%endif
 
 %install
 rm -rf %{buildroot}
-
 make DESTDIR=%{buildroot} install
 
-%files 
+%files
 %doc BUGREPORTS CHANGES DEVELOPMENT EXAMPLES FAQ PORTING
-%doc COPYING* README SECURITY testcert.conf
-%doc daemon.sh ftp.sh gatherinfo.sh mail.sh proxy.sh 
-%doc proxyecho.sh readline.sh readline-test.sh
-%doc socks4echo.sh socks4a-echo.sh test.sh
+%doc COPYING* README SECURITY
+%doc %attr(0644,root,root) *.sh
+%if %{enable_tests}
+%doc testcert.conf
+%endif
 %{_bindir}/socat
 %{_bindir}/filan
 %{_bindir}/procan
 %doc %{_mandir}/man1/socat.1*
 
 %changelog
+* Thu Apr 20 2017 Paul Wouters <pwouters@redhat.com> - 1.7.3.2-2
+- Resolves: rhbz#1420777 Make sure to rebuild "socat" for RHEL 7.4 - incorrect hardening flags
+
+* Tue Mar 07 2017 Paul Wouters <pwouters@redhat.com> - 1.7.3.2-1
+- Resolves: rhbz#1085024 rebase socat to 1.7.3.2
+
+* Mon Dec 05 2016 Paul Wouters <pwouters@redhat.com> - 1.7.3.1-1
+- Resolves: rhbz#1085024 rebase socat to 1.7.3.1
+
+* Wed Jan 29 2014 Paul Wouters <pwouters@redhat.com> - 1.7.2.2-5
+- Resolves: CVE-2014-0019 (rhbz#1057748)
+
+* Fri Jan 24 2014 Daniel Mach <dmach@redhat.com> - 1.7.2.2-4
+- Mass rebuild 2014-01-24
+
+* Fri Dec 27 2013 Daniel Mach <dmach@redhat.com> - 1.7.2.2-3
+- Mass rebuild 2013-12-27
+
 * Thu Oct 10 2013 Paul Wouters <pwouters@redhat.com> - 1.7.2.2-2
 - Resolves: rhel#1017015 Use readline, not compat-readline5-devel
 - Added two patches fixing -Wformat issues
@@ -89,7 +114,7 @@ make DESTDIR=%{buildroot} install
 
 * Sat Jan 07 2012 Paul Wouters <paul@nohats.ca> - 1.7.2.0-1
 - Upgraded to 1.7.2.0 which allows tun/tap interfaces without IP address
-  and introduces options openssl-compress and max-children. 
+  and introduces options openssl-compress and max-children.
 
 * Wed Sep 21 2011 Paul Wouters <paul@xelerance.com> - 1.7.1.3-3
 - support TUN endpoint without IP address (rhbz#706226) [Till Maas]
@@ -156,7 +181,7 @@ make DESTDIR=%{buildroot} install
 
 * Mon Feb 19 2007 Paul Wouters <paul@xelerance.com> 1.5.0.0-4
 - Some filesystem defines moved from their specific (ext2)
-  filesystem defines into the generic <linux/fs.h>. 
+  filesystem defines into the generic <linux/fs.h>.
 
 * Mon Sep 11 2006 Paul Wouters <paul@xelerance.com> 1.5.0.0-3
 - Rebuild requested for PT_GNU_HASH support from gcc

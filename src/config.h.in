@@ -1,5 +1,5 @@
 /* source: config.h.in */
-/* Copyright Gerhard Rieger 2001-2011 */
+/* Copyright Gerhard Rieger and contributors (see file CHANGES) */
 /* Published under the GNU General Public License V.2, see file COPYING */
 
 #ifndef __config_h_included
@@ -53,6 +53,13 @@
 /* Define if you have the putenv function.  */
 #undef HAVE_PUTENV
 
+/* Define if your cc provides char **environ declaration.
+   This implies HAVE_VAR_ENVIRON */
+#undef HAVE_DECL_ENVIRON
+
+/* Define if you have the char **environ variable */
+#undef HAVE_VAR_ENVIRON
+
 /* Define if you have the select function.  */
 #undef HAVE_SELECT
 
@@ -63,13 +70,13 @@
 #undef HAVE_SOCKET
 
 /* Define if you have the strdup function.  */
-#undef HAVE_STRDUP
+#undef HAVE_PROTOTYPE_LIB_strdup
 
 /* Define if you have the strerror function.  */
-#undef HAVE_STRERROR
+#undef HAVE_PROTOTYPE_LIB_strerror
 
 /* Define if you have the strstr function.  */
-#undef HAVE_STRSTR
+#undef HAVE_PROTOTYPE_LIB_strstr
 
 /* Define if you have the strtod function.  */
 #undef HAVE_STRTOD
@@ -96,7 +103,7 @@
 #undef HAVE_GETADDRINFO
 
 /* Define if you have the getipnodebyname function.  */
-#undef HAVE_GETIPNODEBYNAME
+#undef HAVE_PROTOTYPE_LIB_getipnodebyname
 
 /* Define if you have the setgroups function. */
 #undef HAVE_SETGROUPS
@@ -105,10 +112,10 @@
 #undef HAVE_INET_ATON
 
 /* Define if you have the memrchr function. */
-#undef HAVE_MEMRCHR
+#undef HAVE_PROTOTYPE_LIB_memrchr
 
 /* Define if you have the if_indextoname function. */
-#undef HAVE_IF_INDEXTONAME
+#undef HAVE_PROTOTYPE_LIB_if_indextoname
 
 /* Define if you have the sigaction function */
 #undef HAVE_SIGACTION
@@ -131,6 +138,9 @@
 /* Define if you have the ftruncate64 function */
 #undef HAVE_FTRUNCATE64
 
+/* Define if you have the clock_gettime function */
+#undef HAVE_CLOCK_GETTIME
+
 /* Define if you have the strtoll function */
 #undef HAVE_STRTOLL
 
@@ -142,6 +152,9 @@
 
 /* Define if you have the hstrerror prototype */
 #undef HAVE_PROTOTYPE_HSTRERROR
+
+/* Define if you have the <stdbool.h> header file.  */
+#undef HAVE_STDBOOL_H
 
 /* Define if you have the <inttypes.h> header file.  */
 #undef HAVE_INTTYPES_H
@@ -181,6 +194,9 @@
 
 /* Define if you have the <sys/types.h> header file.  */
 #undef HAVE_SYS_TYPES_H
+
+/* Define if you have the <poll.h> header file.  */
+#undef HAVE_POLL_H
 
 /* Define if you have the <sys/poll.h> header file.  */
 #undef HAVE_SYS_POLL_H
@@ -308,6 +324,9 @@
 /* define if your struct sigaction has sa_sigaction */
 #undef HAVE_STRUCT_SIGACTION_SA_SIGACTION
 
+/* define if you have struct sock_extended_err */
+#undef HAVE_STRUCT_SOCK_EXTENDED_ERR
+
 /* Define if your struct termios has component c_ispeed */
 #undef HAVE_TERMIOS_ISPEED
 
@@ -325,11 +344,23 @@
 /* Define if your termios.h likes _SVID3 defined */
 #undef _SVID3
 
+/* Define if your sys/socket.h likes _XPG4_2 defined */
+#undef _XPG4_2
+
+/* Define if your ctime_r() choices need _POSIX_PTHREAD_SEMANTICS */
+#undef _POSIX_PTHREAD_SEMANTICS
+
+/* Define if you need __EXTENSIONS__ */
+#undef __EXTENSIONS__
+
 /* Define if you have struct timespec (e.g. for nanosleep) */
 #undef HAVE_STRUCT_TIMESPEC
 
 /* Define if you have struct linger */
 #undef HAVE_STRUCT_LINGER
+
+/* Define if you have struct ip */
+#undef HAVE_STRUCT_IP
 
 /* Define if you have struct ip_mreq */
 #undef HAVE_STRUCT_IP_MREQ
@@ -376,6 +407,9 @@
 /* define if your struct in_pktinfo has component ipi_spec_dst */
 #undef HAVE_PKTINFO_IPI_SPEC_DST
 
+/* define if you have struct in6_pktinfo */
+#undef HAVE_STRUCT_IN6_PKTINFO
+
 /* define if your struct ip has ip_hl; otherwise assume ip_vhl */
 #undef HAVE_STRUCT_IP_IP_HL
 
@@ -385,11 +419,51 @@
 /* Define if you have the unsetenv function. not on HP-UX */
 #undef HAVE_UNSETENV
 
-/* Define if you have the SSLv2_client_method function. not in new openssl */
+/* Define if you have the SSLv2 client and server method functions. not in new openssl */
 #undef HAVE_SSLv2_client_method
-
-/* Define if you have the SSLv2_server_method function. not in new openssl */
 #undef HAVE_SSLv2_server_method
+
+/* Define if you have the HAVE_SSL_CTX_set_default_verify_paths function */
+#undef HAVE_SSL_CTX_set_default_verify_paths
+
+/* Define if you have the SSLv3 client and server method functions. not in new openssl */
+#undef HAVE_SSLv3_client_method
+#undef HAVE_SSLv3_server_method
+
+/* Define if you have the SSLv3 client and server method functions with rollback to v2 */
+#undef HAVE_SSLv23_client_method
+#undef HAVE_SSLv23_server_method
+
+/* Define if you have the TLSv1.0 client and server method functions */
+#undef HAVE_TLSv1_client_method
+#undef HAVE_TLSv1_server_method
+
+/* Define if you have the TLSv1.1 client and server method functions */
+#undef HAVE_TLSv1_1_client_method
+#undef HAVE_TLSv1_1_server_method
+
+/* Define if you have the TLSv1.2 client and server method functions */
+#undef HAVE_TLSv1_2_client_method
+#undef HAVE_TLSv1_2_server_method
+
+/* Define if you have the DTLSv1 client and server method functions */
+#undef HAVE_DTLSv1_client_method
+#undef HAVE_DTLSv1_server_method
+
+/* Define if you have the EC_KEY type */
+#undef HAVE_TYPE_EC_KEY
+
+/* Define if you have the OpenSSL RAND_egd function */
+#undef HAVE_RAND_egd
+
+/* Define if you have the OpenSSL RAND_status function */
+#undef HAVE_RAND_status
+
+/* Define if you have the OpenSSL DH_set0_pqg function */
+#undef HAVE_DH_set0_pqg
+
+/* Define if you have the OpenSSL ASN1_STRING_get0_data function */
+#undef HAVE_ASN1_STRING_get0_data
 
 /* Define if you have the flock function */
 #undef HAVE_FLOCK
@@ -404,7 +478,7 @@
 #undef HAVE_UNLOCKPT
 
 /* Define if you have the ptsname function */
-#undef HAVE_PTSNAME
+#undef HAVE_PROTOTYPE_LIB_ptsname
 
 /* Define if you have the /dev/ptmx pseudo terminal multiplexer */
 #undef HAVE_DEV_PTMX
@@ -412,8 +486,17 @@
 /* Define if you have the /dev/ptc pseudo terminal multiplexer */
 #undef HAVE_DEV_PTC
 
+/* Define if you have the cfmakeraw() function */
+#undef HAVE_CFMAKERAW
+
 /* Define if you have the long long type */
 #undef HAVE_TYPE_LONGLONG
+
+/* is sig_atomic_t declared */
+#undef HAVE_TYPE_SIG_ATOMIC_T
+
+/* is bool already typedef'd? */
+#undef HAVE_TYPE_BOOL
 
 /* is socklen_t already typedef'd? */
 #undef HAVE_TYPE_SOCKLEN
@@ -438,6 +521,9 @@
 
 /* is uint64_t already defined? */
 #undef HAVE_TYPE_UINT64
+
+/* Define if snprintf() returns required len on truncation (C-99 conform) */
+#undef HAVE_C99_SNPRINTF
 
 /* Define if you have the printf "Z" modifier */
 #undef HAVE_FORMAT_Z
@@ -489,6 +575,8 @@
 
 #undef HAVE_TYPEOF_RLIM_MAX
 
+#undef HAVE_TYPEOF_STRUCT_CMSGHDR_CMSG_LEN
+
 /* Define if you have the /proc filesystem */
 #undef HAVE_PROC_DIR
 
@@ -498,6 +586,7 @@
 #undef HAVE_SETGRENT
 #undef HAVE_GETGRENT
 #undef HAVE_ENDGRENT
+#undef HAVE_GETGROUPLIST
 
 #undef WITH_HELP
 #undef WITH_STDIO
@@ -540,5 +629,7 @@
 #undef WITH_RETRY
 
 #undef WITH_MSGLEVEL
+
+#define BUILD_DATE __DATE__ " " __TIME__
 
 #endif /* !defined(__config_h_included) */

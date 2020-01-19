@@ -1,5 +1,5 @@
 # source: Makefile.in
-# Copyright Gerhard Rieger 2001-2009
+# Copyright Gerhard Rieger and contributors (see file CHANGES)
 # Published under the GNU General Public License V.2, see file COPYING
 
 # note: @...@ forms are filled in by configure script
@@ -54,13 +54,13 @@ XIOSRCS = xioinitialize.c xiohelp.c xioparam.c xiodiag.c xioopen.c xioopts.c \
 	xio-pty.c xio-openssl.c xio-streams.c\
 	xio-ascii.c xiolockfile.c xio-tcpwrap.c xio-ext2.c xio-tun.c
 XIOOBJS = $(XIOSRCS:.c=.o)
-UTLSRCS = error.c dalan.c procan.c procan-cdefs.c hostan.c fdname.c sysutils.c utils.c nestlex.c @FILAN@ @SYCLS@ @SSLCLS@
+UTLSRCS = error.c dalan.c procan.c procan-cdefs.c hostan.c fdname.c sysutils.c utils.c nestlex.c vsnprintf_r.c snprinterr.c @FILAN@ sycls.c @SSLCLS@
 UTLOBJS = $(UTLSRCS:.c=.o)
 CFILES = $(XIOSRCS) $(UTLSRCS) socat.c procan_main.c filan_main.c
 OFILES = $(CFILES:.c=.o)
 PROGS = socat procan filan
 
-HFILES = sycls.h sslcls.h error.h dalan.h procan.h filan.h hostan.h sysincludes.h xio.h xioopen.h sysutils.h utils.h nestlex.h compat.h \
+HFILES = sycls.h sslcls.h error.h dalan.h procan.h filan.h hostan.h sysincludes.h xio.h xioopen.h sysutils.h utils.h nestlex.h vsnprintf_r.h snprinterr.h compat.h \
 	xioconfig.h mytypes.h xioopts.h xiodiag.h xiohelp.h xiosysincludes.h \
 	xiomodes.h xiolayer.h xio-process.h xio-fd.h xio-fdnum.h xio-stdio.h \
 	xio-named.h xio-file.h xio-creat.h xio-gopen.h xio-pipe.h \
@@ -77,11 +77,11 @@ DOCFILES = README README.FIPS CHANGES FILES EXAMPLES PORTING SECURITY DEVELOPMEN
 SHFILES = daemon.sh mail.sh ftp.sh readline.sh \
 	socat_buildscript_for_android.sh
 TESTFILES = test.sh socks4echo.sh proxyecho.sh gatherinfo.sh readline-test.sh \
-	proxy.sh socks4a-echo.sh testcert.conf
+	proxy.sh socks4a-echo.sh
 OSFILES = Config/Makefile.Linux-2-6-24 Config/config.Linux-2-6-24.h \
 	Config/Makefile.SunOS-5-10 Config/config.SunOS-5-10.h \
 	Config/Makefile.FreeBSD-6-1 Config/config.FreeBSD-6-1.h \
-	Config/Makefile.NetBSD-4-0 Config/config.NetBSD-4-0.h \
+	Config/Makefile.NetBSD-5-1  Config/config.NetBSD-5-1.h \
 	Config/Makefile.OpenBSD-4-3 Config/config.OpenBSD-4-3.h \
 	Config/Makefile.AIX-5-3 Config/config.AIX-5-3.h \
 	Config/Makefile.Cygwin-1-5-25 Config/config.Cygwin-1-5-25.h \
@@ -114,12 +114,12 @@ depend: $(CFILES) $(HFILES)
 socat: socat.o libxio.a
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ socat.o libxio.a $(CLIBS)
 
-PROCAN_OBJS=procan_main.o procan.o procan-cdefs.o hostan.o error.o sycls.o sysutils.o utils.o
+PROCAN_OBJS=procan_main.o procan.o procan-cdefs.o hostan.o error.o sycls.o sysutils.o utils.o vsnprintf_r.o snprinterr.o
 procan: $(PROCAN_OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(PROCAN_OBJS) $(CLIBS)
 
 filan: filan_main.o filan.o fdname.o error.o sycls.o sysutils.o utils.o
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ filan_main.o filan.o fdname.o error.o sycls.o sysutils.o utils.o $(CLIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ filan_main.o filan.o fdname.o error.o sycls.o sysutils.o utils.o vsnprintf_r.o snprinterr.o $(CLIBS)
 
 libxio.a: $(XIOOBJS) $(UTLOBJS)
 	$(AR) r $@ $(XIOOBJS) $(UTLOBJS)
@@ -156,7 +156,8 @@ socat.tar.bz2: socat.tar
 
 VERSION = `sed 's/"//g' VERSION`
 TARDIR = socat-$(VERSION)
-socat.tar: configure.in configure Makefile.in config.h.in install-sh VERSION $(CFILES) $(HFILES) $(DOCFILES) $(SHFILES) $(OSFILES) $(TESTFILES) socat.spec
+socat.tar: configure.in configure Makefile.in config.h.in install-sh VERSION $(CFILES) $(HFILES) $(DOCFILES) $(SHFILES) $(OSFILES) $(TESTFILES) socat.spec \
+	configure.ac
 	if [ ! -d $(TARDIR) ]; then mkdir $(TARDIR); fi
 	tar cf - $+ |(cd $(TARDIR); tar xf -)
 	tar cvf socat.tar $(TARDIR)

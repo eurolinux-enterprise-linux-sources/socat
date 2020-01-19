@@ -1,5 +1,5 @@
 /* source: sslcls.h */
-/* Copyright Gerhard Rieger 2001-2011 */
+/* Copyright Gerhard Rieger and contributors (see file CHANGES) */
 /* Published under the GNU General Public License V.2, see file COPYING */
 
 #ifndef __sslcls_h_included
@@ -18,6 +18,12 @@ const SSL_METHOD *sycSSLv23_client_method(void);
 const SSL_METHOD *sycSSLv23_server_method(void);
 const SSL_METHOD *sycTLSv1_client_method(void);
 const SSL_METHOD *sycTLSv1_server_method(void);
+const SSL_METHOD *sycTLSv1_1_client_method(void);
+const SSL_METHOD *sycTLSv1_1_server_method(void);
+const SSL_METHOD *sycTLSv1_2_client_method(void);
+const SSL_METHOD *sycTLSv1_2_server_method(void);
+const SSL_METHOD *sycDTLSv1_client_method(void);
+const SSL_METHOD *sycDTLSv1_server_method(void);
 SSL_CTX *sycSSL_CTX_new(const SSL_METHOD *method);
 SSL *sycSSL_new(SSL_CTX *ctx);
 int sycSSL_CTX_load_verify_locations(SSL_CTX *ctx, const char *CAfile,
@@ -49,7 +55,7 @@ BIO *sycBIO_new_file(const char *filename, const char *mode);
 
 int sycFIPS_mode_set(int onoff);
 
-#if OPENSSL_VERSION_NUMBER >= 0x00908000L
+#if OPENSSL_VERSION_NUMBER >= 0x00908000L && !defined(OPENSSL_NO_COMP)
 const COMP_METHOD *sycSSL_get_current_compression(SSL *ssl);
 const COMP_METHOD *sycSSL_get_current_expansion(SSL *ssl);
 const char *sycSSL_COMP_get_name(const COMP_METHOD *comp);
@@ -71,6 +77,12 @@ const char *sycSSL_COMP_get_name(const COMP_METHOD *comp);
 #define sycSSLv23_server_method() SSLv23_server_method()
 #define sycTLSv1_client_method() TLSv1_client_method()
 #define sycTLSv1_server_method() TLSv1_server_method()
+#define sycTLSv1_1_client_method() TLSv1_1_client_method()
+#define sycTLSv1_1_server_method() TLSv1_1_server_method()
+#define sycTLSv1_2_client_method() TLSv1_2_client_method()
+#define sycTLSv1_2_server_method() TLSv1_2_server_method()
+#define sycDTLSv1_client_method() DTLSv1_client_method()
+#define sycDTLSv1_server_method() DTLSv1_server_method()
 #define sycSSL_CTX_new(m) SSL_CTX_new(m)
 #define sycSSL_new(c) SSL_new(c)
 #define sycSSL_CTX_load_verify_locations(c,f,p) SSL_CTX_load_verify_locations(c,f,p)

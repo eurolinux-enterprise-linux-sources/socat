@@ -1,5 +1,5 @@
 /* source: xio-readline.c */
-/* Copyright Gerhard Rieger 2002-2012 */
+/* Copyright Gerhard Rieger and contributors (see file CHANGES) */
 /* Published under the GNU General Public License V.2, see file COPYING */
 
 /* this file contains the source for opening the readline address */
@@ -61,8 +61,10 @@ static int xioopen_readline(int argc, const char *argv[], struct opt *opts,
    if ((rw+1)&1) {
       strcpy(cp, "readline on stdin for reading"); cp = strchr(cp, '\0');
 
-      if ((rw+1)&2)
-      strcpy(cp, " and ");  cp = strchr(cp, '\0');
+      if ((rw+1)&2) {
+	 strcpy(cp, " and ");
+	 cp = strchr(cp, '\0');
+      }
    }
    if ((rw+1)&2) {
       strcpy(cp, "stdio for writing"); cp = strchr(cp, '\0');
@@ -202,7 +204,7 @@ ssize_t xioread_readline(struct single *pipe, void *buff, size_t bufsiz) {
 #endif /* _WITH_TERMIOS */
       Add_history(line);
       bytes = strlen(line);
-      strncpy(buff, line, bufsiz);
+      ((char *)buff)[0] = '\0'; strncat(buff, line, bufsiz-1);
       free(line);
       if ((size_t)bytes < bufsiz) {
 	 strcat(buff, "\n");  ++bytes;

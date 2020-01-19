@@ -1,5 +1,5 @@
 /* source: xio-udp.c */
-/* Copyright Gerhard Rieger 2001-2011 */
+/* Copyright Gerhard Rieger and contributors (see file CHANGES) */
 /* Published under the GNU General Public License V.2, see file COPYING */
 
 /* this file contains the source for handling UDP addresses */
@@ -86,6 +86,7 @@ int xioopen_ipdgram_listen(int argc, const char *argv[], struct opt *opts,
    int socktype = SOCK_DGRAM;
    struct pollfd readfd;
    bool dofork = false;
+   int maxchildren = 0;
    pid_t pid;
    char *rangename;
    char infobuff[256];
@@ -142,6 +143,13 @@ int xioopen_ipdgram_listen(int argc, const char *argv[], struct opt *opts,
       }
    }
 
+   retropt_int(opts, OPT_MAX_CHILDREN, &maxchildren);
+
+   if (! dofork && maxchildren) {
+       Error("option max-children not allowed without option fork");
+       return STAT_NORETRY;
+   }
+
 #if WITH_IP4 /*|| WITH_IP6*/
    if (retropt_string(opts, OPT_RANGE, &rangename) >= 0) {
       if (xioparserange(rangename, pf, &fd->stream.para.socket.range) < 0) {
@@ -195,7 +203,7 @@ int xioopen_ipdgram_listen(int argc, const char *argv[], struct opt *opts,
       applyopts(fd->stream.fd, opts, PH_PREBIND);
       applyopts(fd->stream.fd, opts, PH_BIND);
       if (Bind(fd->stream.fd, &us.soa, uslen) < 0) {
-	 Error4("bind(%d, {%s}, "F_Zd"): %s", fd->stream.fd,
+	 Error4("bind(%d, {%s}, "F_socklen"): %s", fd->stream.fd,
 		sockaddr_info(&us.soa, uslen, infobuff, sizeof(infobuff)),
 		uslen, strerror(errno));
 	 return STAT_RETRYLATER;
@@ -221,7 +229,7 @@ int xioopen_ipdgram_listen(int argc, const char *argv[], struct opt *opts,
 			     &them->soa, &themlen);
       } while (result < 0 && errno == EINTR);
       if (result < 0) {
-	 Error5("recvfrom(%d, %p, 1, MSG_PEEK, {%s}, {"F_Zu"}): %s",
+	 Error5("recvfrom(%d, %p, 1, MSG_PEEK, {%s}, {"F_socklen"}): %s",
 		fd->stream.fd, buff1,
 		sockaddr_info(&them->soa, themlen, infobuff, sizeof(infobuff)),
 		themlen, strerror(errno));
@@ -248,6 +256,8 @@ int xioopen_ipdgram_listen(int argc, const char *argv[], struct opt *opts,
 	 }
 
 	 if (pid == 0) {	/* child */
+	    pid_t cpid = Getpid();
+	    xiosetenvulong("PID", cpid, 1);
 	    break;
 	 }
 
@@ -258,6 +268,14 @@ int xioopen_ipdgram_listen(int argc, const char *argv[], struct opt *opts,
 	    Info2("close(%d): %s", fd->stream.fd, strerror(errno));
 	 }
 
+	 while (maxchildren) {
+	    if (num_child < maxchildren) break;
+	    Notice("maxchildren are active, waiting");
+	    /* UINT_MAX would even be nicer, but Openindiana works only
+	       with 31 bits */
+	    while (!Sleep(INT_MAX)) ;	/* any signal lets us continue */
+	 }
+	 Info("still listening");
 	 continue;
       }
       break;
@@ -265,7 +283,7 @@ int xioopen_ipdgram_listen(int argc, const char *argv[], struct opt *opts,
 
    applyopts(fd->stream.fd, opts, PH_CONNECT);
    if ((result = Connect(fd->stream.fd, &them->soa, themlen)) < 0) {
-      Error4("connect(%d, {%s}, "F_Zd"): %s",
+      Error4("connect(%d, {%s}, "F_socklen"): %s",
 	     fd->stream.fd,
 	     sockaddr_info(&them->soa, themlen, infobuff, sizeof(infobuff)),
 	     themlen, strerror(errno));
