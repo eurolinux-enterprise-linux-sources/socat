@@ -3,7 +3,7 @@
 Summary: Bidirectional data relay between two data channels ('netcat++')
 Name: socat
 Version: 1.7.2.2
-Release: 2%{?dist}
+Release: 5%{?dist}
 License: GPLv2
 Url:  http://www.dest-unreach.org/%{name}
 Source: http://www.dest-unreach.org/socat/download/%{name}-%{version}.tar.gz
@@ -13,6 +13,7 @@ BuildRequires: autoconf kernel-headers > 2.6.18
 
 Patch1: socat-1.7.2.1-procan-cdefs.patch
 Patch2: socat-1.7.2.1-errqueue.patch
+Patch3: socat-1.7.2.3.patch
 
 %description
 Socat is a relay for bidirectional data transfer between two independent data
@@ -28,6 +29,7 @@ iconv -f iso8859-1 -t utf-8 CHANGES > CHANGES.utf8
 mv CHANGES.utf8 CHANGES
 %patch1 -p1
 %patch2 -p1
+%patch3 -p1
 
 %build
 autoconf
@@ -67,6 +69,15 @@ make DESTDIR=%{buildroot} install
 %doc %{_mandir}/man1/socat.1*
 
 %changelog
+* Wed Jan 29 2014 Paul Wouters <pwouters@redhat.com> - 1.7.2.2-5
+- Resolves: CVE-2014-0019 (rhbz#1057748)
+
+* Fri Jan 24 2014 Daniel Mach <dmach@redhat.com> - 1.7.2.2-4
+- Mass rebuild 2014-01-24
+
+* Fri Dec 27 2013 Daniel Mach <dmach@redhat.com> - 1.7.2.2-3
+- Mass rebuild 2013-12-27
+
 * Thu Oct 10 2013 Paul Wouters <pwouters@redhat.com> - 1.7.2.2-2
 - Resolves: rhel#1017015 Use readline, not compat-readline5-devel
 - Added two patches fixing -Wformat issues
